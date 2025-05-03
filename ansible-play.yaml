@@ -1,0 +1,104 @@
+---
+- name: Install Docker only if not already installed
+  hosts: all
+  become: true
+  vars:
+    docker_package_check_command: "docker --version"
+    image_name: my_php_app
+    container_name: my_php_app_container
+
+  tasks:
+    - name: Check if Docker is already installed
+      command: "{{ docker_package_check_command }}"
+      register: docker_check
+      ignore_errors: true
+
+    - name: Update apt packages
+      apt:
+        update_cache: yes
+      when: docker_check.rc != 0
+
+    - name: Install prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+          - gnupg
+          - lsb-release
+        state: present
+      when: docker_check.rc != 0
+
+    - name: Add Docker’s official GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+      when: docker_check.rc != 0
+
+    - name: Add Docker APT repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_lsb.codename }} stable
+        state: present
+      when: docker_check.rc != 0
+
+    - name: Update apt cache again
+      apt:
+        update_cache: yes
+      when: docker_check.rc != 0
+
+    - name: Install Docker CE
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+      when: docker_check.rc != 0
+
+    - name: Ensure Docker service is running
+      service:
+        name: docker
+        state: started
+        enabled: true
+      when: docker_check.rc != 0
+
+    - name: Add current user to docker group
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+      when: docker_check.rc != 0
+
+    - name: Copy Docker build context to remote host
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/"
+        dest: /tmp/docker_build/
+        mode: preserve
+
+    - name: Ensure docker is installed
+      command: docker --version
+      register: docker_installed
+      failed_when: docker_installed.rc != 0
+      changed_when: false
+
+    - name: Build Docker image from Dockerfile
+      community.docker.docker_image:
+       name: "{{ image_name }}"
+       tag: latest
+       source: build
+       build:
+          path: /tmp/docker_build/
+          dockerfile: Dockerfile
+       tags: build
+
+
+    - name: Run Docker container from image
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: "{{ image_name }}"
+        ports:
+          - "8080:80"
+        restart_policy: always
+      tags: run
+
